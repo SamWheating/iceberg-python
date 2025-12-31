@@ -240,6 +240,13 @@ class TableMetadataCommonFields(IcebergBaseModel):
         """Get the snapshot by snapshot_id."""
         return next((snapshot for snapshot in self.snapshots if snapshot.snapshot_id == snapshot_id), None)
 
+    def snapshot_by_timestamp(self, timestamp_ms: int) -> Snapshot | None:
+        """Get the latest snapshot as of a specific timestamp."""
+        snapshots = sorted([s for s in self.snapshots if s.timestamp_ms <= timestamp_ms], key=lambda s: s.timestamp_ms)
+        if len(snapshots) > 0:
+            return snapshots[-1]
+        return None
+
     def schema_by_id(self, schema_id: int) -> Schema | None:
         """Get the schema by schema_id."""
         return next((schema for schema in self.schemas if schema.schema_id == schema_id), None)

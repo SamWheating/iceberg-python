@@ -18,6 +18,7 @@
 import json
 import uuid
 from copy import copy
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -1219,6 +1220,76 @@ def test_correct_schema() -> None:
         _ = t.scan(snapshot_id=-1).projection()
 
     assert "Snapshot not found: -1" in str(exc_info.value)
+
+
+def test_scan_by_timestamp() -> None:
+    table_metadata = TableMetadataV2(
+        **{
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 34,
+            "last-updated-ms": 1602638573590,
+            "last-column-id": 3,
+            "current-schema-id": 0,
+            "schemas": [
+                {"type": "struct", "schema-id": 0, "fields": [{"id": 1, "name": "x", "required": True, "type": "long"}]},
+            ],
+            "default-spec-id": 0,
+            "partition-specs": [
+                {"spec-id": 0, "fields": [{"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000}]}
+            ],
+            "last-partition-id": 1000,
+            "default-sort-order-id": 0,
+            "sort-orders": [],
+            "current-snapshot-id": 123,
+            "snapshots": [
+                {
+                    "snapshot-id": 234,
+                    "timestamp-ms": 1767200400000,  # 2025-12-31T12:00:00
+                    "sequence-number": 0,
+                    "summary": {"operation": "append"},
+                    "manifest-list": "s3://a/b/1.avro",
+                    "schema-id": 0,
+                },
+                {
+                    "snapshot-id": 123,
+                    "timestamp-ms": 1767204000000,  # 2025-12-31T13:00:00
+                    "sequence-number": 0,
+                    "summary": {"operation": "append"},
+                    "manifest-list": "s3://a/b/1.avro",
+                    "schema-id": 0,
+                },
+            ],
+        }
+    )
+
+    t = Table(
+        identifier=("default", "t1"),
+        metadata=table_metadata,
+        metadata_location="s3://../..",
+        io=load_file_io(),
+        catalog=NoopCatalog("NoopCatalog"),
+    )
+
+    target_datetime = int(datetime(year=2025, month=12, day=31, hour=12, minute=30).timestamp() * 1000)
+
+    scan = t.scan(snapshot_timestamp=target_datetime)
+
+    snapshot = scan.snapshot()
+    assert snapshot is not None and snapshot.snapshot_id == 234
+
+    # supplying both snapshot ID and timestamp
+    with pytest.raises(ValueError) as exc_info:
+        _ = t.scan(snapshot_id=1234, snapshot_timestamp=1767204000000).projection()
+
+    assert "Can only set one of snapshot_id, snapshot_timestamp" in str(exc_info.value)
+
+    # supplying invalid timestamp_id
+    with pytest.raises(ValueError) as exc_info:
+        _ = t.scan(snapshot_timestamp=1325397600000).projection()
+
+    assert "No snapshot found for timestamp: 1325397600000" in str(exc_info.value)
 
 
 def test_table_properties(example_table_metadata_v2: dict[str, Any]) -> None:

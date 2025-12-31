@@ -1127,6 +1127,7 @@ class Table:
         selected_fields: tuple[str, ...] = ("*",),
         case_sensitive: bool = True,
         snapshot_id: int | None = None,
+        snapshot_timestamp: int | None = None,
         options: Properties = EMPTY_DICT,
         limit: int | None = None,
     ) -> DataScan:
@@ -1148,6 +1149,10 @@ class Table:
             snapshot_id:
                 Optional Snapshot ID to time travel to. If None,
                 scans the table as of the current snapshot ID.
+            snapshot_timestamp:
+                Optional timestamp (in epoch-ms) to time travel to.
+                If None, scan the table as of the current snapshot ID.
+                Mutually exclusive with snapshot_id.
             options:
                 Additional Table properties as a dictionary of
                 string key value pairs to use for this scan.
@@ -1166,6 +1171,7 @@ class Table:
             selected_fields=selected_fields,
             case_sensitive=case_sensitive,
             snapshot_id=snapshot_id,
+            snapshot_timestamp=snapshot_timestamp,
             options=options,
             limit=limit,
         )
@@ -1650,6 +1656,7 @@ class StagedTable(Table):
         selected_fields: tuple[str, ...] = ("*",),
         case_sensitive: bool = True,
         snapshot_id: int | None = None,
+        snapshot_timestamp: int | None = None,
         options: Properties = EMPTY_DICT,
         limit: int | None = None,
     ) -> DataScan:
@@ -1682,6 +1689,7 @@ class TableScan(ABC):
     selected_fields: tuple[str, ...]
     case_sensitive: bool
     snapshot_id: int | None
+    snapshot_timestamp: int | None
     options: Properties
     limit: int | None
 
@@ -1693,6 +1701,7 @@ class TableScan(ABC):
         selected_fields: tuple[str, ...] = ("*",),
         case_sensitive: bool = True,
         snapshot_id: int | None = None,
+        snapshot_timestamp: int | None = None,
         options: Properties = EMPTY_DICT,
         limit: int | None = None,
     ):
@@ -1702,28 +1711,39 @@ class TableScan(ABC):
         self.selected_fields = selected_fields
         self.case_sensitive = case_sensitive
         self.snapshot_id = snapshot_id
+        self.snapshot_timestamp = snapshot_timestamp
         self.options = options
         self.limit = limit
+
+        if snapshot_id and snapshot_timestamp:
+            raise ValueError("Can only set one of snapshot_id, snapshot_timestamp")
 
     def snapshot(self) -> Snapshot | None:
         if self.snapshot_id:
             return self.table_metadata.snapshot_by_id(self.snapshot_id)
+        elif self.snapshot_timestamp:
+            return self.table_metadata.snapshot_by_timestamp(self.snapshot_timestamp)
         return self.table_metadata.current_snapshot()
 
     def projection(self) -> Schema:
         current_schema = self.table_metadata.schema()
-        if self.snapshot_id is not None:
-            snapshot = self.table_metadata.snapshot_by_id(self.snapshot_id)
-            if snapshot is not None:
-                if snapshot.schema_id is not None:
-                    try:
-                        current_schema = next(
-                            schema for schema in self.table_metadata.schemas if schema.schema_id == snapshot.schema_id
-                        )
-                    except StopIteration:
-                        warnings.warn(f"Metadata does not contain schema with id: {snapshot.schema_id}", stacklevel=2)
-            else:
+        if self.snapshot_id is not None or self.snapshot_timestamp is not None:
+            if self.snapshot_timestamp is not None:
+                snapshot = self.table_metadata.snapshot_by_timestamp(self.snapshot_timestamp)
+                if snapshot is None:
+                    raise ValueError(f"No snapshot found for timestamp: {self.snapshot_timestamp}")
+            elif self.snapshot_id is not None:
+                snapshot = self.table_metadata.snapshot_by_id(self.snapshot_id)
+            if snapshot is None:
                 raise ValueError(f"Snapshot not found: {self.snapshot_id}")
+
+            if snapshot.schema_id is not None:
+                try:
+                    current_schema = next(
+                        schema for schema in self.table_metadata.schemas if schema.schema_id == snapshot.schema_id
+                    )
+                except StopIteration:
+                    warnings.warn(f"Metadata does not contain schema with id: {snapshot.schema_id}", stacklevel=2)
 
         if "*" in self.selected_fields:
             return current_schema
